@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "strudel": {
+      "source": "bfollington/terma",
+      "sourceType": "github",
+      "skillPath": "plugins/tsal/skills/strudel/SKILL.md",
+      "computedHash": "5d033ea77e774b4c0ec92bd7475dced93532850669c3b702c14a1f57b3de29eb"
+    }
+  }
+}

@@ -1,0 +1,39 @@
+stack(
+  // Tanpura drone - Sa and Pa
+  note("[c2,g2,c3]")
+    .s("triangle")
+    .gain(0.35)
+    .room(0.7)
+    .rsize(3)
+    .attack(2)
+    .release(4)
+    .lpf(500),
+
+  // Raga Bhairavi melody
+  note("<[c4 ~ db4 eb4] [f4 eb4 ~ db4] [eb4 f4 g4 f4] [eb4 db4 c4 ~]>")
+    .s("sine")
+    .gain(2)
+    .vib(5).vibmod(0.4)
+    .delay(0.2)
+    .delaytime(0.375)
+    .delayfeedback(0.3)
+    .room(0.5)
+    .lpf(2500)
+    .attack(0.05)
+    .decay(0.3)
+    .sustain(0.5)
+    .release(0.8),
+
+  // Tabla pattern
+  s("[bd [~ bd:1] [~ bd] ~, ~ rim [~ rim] rim:1]")
+    .gain(0.5)
+    .room(0.15)
+    .lpf(3500),
+
+  // Gentle shaker texture
+  s("hh*8")
+    .gain(perlin.range(0.06, 0.18))
+    .hpf(7000)
+    .room(0.3)
+    .pan(sine.range(0.3, 0.7).slow(8))
+).cpm(120/4)
