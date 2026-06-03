@@ -21,3 +21,31 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Fine-tuning artifacts
+/finetune/venv
+/finetune/venv-mlc
+/finetune/adapters
+/finetune/adapters-combined
+/finetune/fused-model
+/finetune/fused-model-hf
+/finetune/fused-model-hf2
+/finetune/fused-model-torch
+/finetune/mlc-model
+/finetune/*.gguf
+/finetune/*.yaml
+/finetune/*.log
+/finetune/data
+
+# Model files (large)
+/static/models
+/static/wasm
+
+# Dataset generation
+/data/*.jsonl
+/data/.strudel-progress
+/data/strudel-finetune
+/data/combined-finetune
+
+# Temp
+/tmp

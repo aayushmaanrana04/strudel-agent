@@ -1,0 +1,71 @@
+root ::= expression
+
+expression ::= stack_expr | single_expr
+
+stack_expr ::= "stack(\n  " single_expr (",\n  " single_expr)* "\n)" chain
+
+single_expr ::= source chain
+
+source ::= "s(\"" mini "\")" | "note(\"" notes "\")" | "n(\"" mini "\")"
+
+chain ::= method*
+
+method ::= sound_m | filter_m | reverb_m | delay_m | dynamics_m | envelope_m | time_m | structure_m | tempo_m
+
+sound_m ::= ".s(\"" synth "\")" | ".bank(\"" bank "\")" | ".scale(\"" scale "\")" | ".sound(\"" synth "\")" | ".voicing()"
+
+synth ::= "sine" | "sawtooth" | "square" | "triangle" | "piano" | "gm_acoustic_grand_piano" | "gm_acoustic_bass" | "gm_electric_piano_1" | "gm_violin" | "gm_cello" | "gm_flute" | "gm_clarinet" | "gm_trumpet" | "gm_alto_sax" | "gm_sitar" | "gm_kalimba" | "gm_taiko_drum" | "gm_xylophone" | "gm_vibraphone" | "gm_synth_strings_1" | "gm_synth_bass_1" | "gm_pad_1_new_age" | "gm_choir_aahs" | "gm_acoustic_guitar_nylon" | "gm_acoustic_guitar_steel" | "gm_steel_drums" | "gm_marimba" | "gm_lead_2_sawtooth" | "gm_banjo" | "gm_koto" | "gm_fiddle" | "gm_bagpipe" | "gm_shamisen"
+
+bank ::= "RolandTR808" | "RolandTR909" | "RolandTR707" | "AkaiLinn"
+
+scale ::= noteroot ":" scaletype
+
+noteroot ::= "C" | "D" | "E" | "F" | "G" | "A" | "B" | "C#" | "Db" | "D#" | "Eb" | "F#" | "Gb" | "G#" | "Ab" | "A#" | "Bb"
+
+scaletype ::= "major" | "minor" | "dorian" | "mixolydian" | "lydian" | "phrygian" | "minor:pentatonic" | "major:pentatonic" | "blues" | "harmonic:minor" | "chromatic"
+
+filter_m ::= ".lpf(" num ")" | ".hpf(" num ")" | ".lpq(" num ")" | ".vowel(\"" vowel "\")"
+
+vowel ::= "a" | "e" | "i" | "o" | "u"
+
+reverb_m ::= ".room(" dec ")" | ".roomsize(" num ")"
+
+delay_m ::= ".delay(" dec ")" | ".delaytime(" dec ")" | ".delayfeedback(" dec ")"
+
+dynamics_m ::= ".gain(" dec ")" | ".pan(" dec ")" | ".crush(" num ")" | ".shape(" dec ")" | ".speed(" snum ")" | ".distort(" num ")"
+
+envelope_m ::= ".attack(" dec ")" | ".decay(" dec ")" | ".sustain(" dec ")" | ".release(" dec ")" | ".fm(" num ")" | ".fmh(" num ")" | ".vib(" num ")"
+
+time_m ::= ".fast(" num ")" | ".slow(" num ")" | ".hurry(" num ")" | ".early(" dec ")" | ".late(" dec ")" | ".swing(" posint ")" | ".rev()" | ".palindrome()" | ".iter(" posint ")" | ".jux(rev)"
+
+structure_m ::= ".euclid(" posint "," posint ")" | ".struct(\"" mini "\")" | ".ply(" num ")" | ".degrade()" | ".degradeBy(" dec ")" | ".sometimes(rev)" | ".sometimes(x => x.fast(2))" | ".sometimes(x => x.speed(2))" | ".every(" posint ", rev)" | ".every(" posint ", x => x.fast(2))" | ".firstOf(" posint ", rev)" | ".superimpose(x => x.add(" snum "))" | ".off(1/" posint ", x => x.add(" snum "))" | ".echo(" posint ", 1/" posint ", " dec ")" | ".cut(" posint ")"
+
+tempo_m ::= ".cpm(" num ")"
+
+mini ::= melement (" " melement)*
+
+melement ::= matom mmod?
+
+matom ::= msound | "~" | "[" mini "]" | "[~ " mini "]" | "<" melement (" " melement)* ">" | "[" mini "," " "? mini "]"
+
+msound ::= [a-z] [a-z0-9]* (":" posint)?
+
+mmod ::= "*" posint | "/" posint | "(" posint "," posint ")" | "(" posint "," posint "," posint ")" | "?" | "!" posint
+
+notes ::= nelement (" " nelement)*
+
+nelement ::= natom nmod?
+
+natom ::= notename | "~" | "[" notes "]" | "<" nelement (" " nelement)* ">" | "[" notename ("," notename)+ "]"
+
+notename ::= [a-g] [#b]? [0-8]?
+
+nmod ::= "*" posint | "/" posint | "(" posint "," posint ")" | "?" | "!" posint
+
+posint ::= [1-9] [0-9]* | "0"
+
+num ::= "-"? posint ("." [0-9]+)?
+
+snum ::= "-"? posint ("." [0-9]+)?
+
+dec ::= "0." [0-9]+ | "0" | "1"

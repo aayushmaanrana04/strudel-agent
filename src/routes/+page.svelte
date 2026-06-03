@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import type { ConversationMessage, ApiResponse } from '$lib/types';
 	import { saveBeat, getAllBeats, deleteBeat, type SavedBeat } from '$lib/storage';
+	import { ClaudeProvider, type LLMProvider, type ModelStatus } from '$lib/providers';
+	import { HistoryService } from '$lib/history';
 
 	const MAX_RETRIES = 2;
 	const MAX_HISTORY = 10;
@@ -15,12 +16,68 @@
 	let retryInfo = $state('');
 	let chatMessagesEl: HTMLElement | undefined = $state();
 	let currentCode = $state('');
+	const history = new HistoryService();
+
+	// Provider state
+	let providerType = $state<'claude' | 'local'>('claude');
+	let provider = $state<LLMProvider>(new ClaudeProvider());
+	let localModelStatus = $state<ModelStatus>({
+		loaded: false,
+		loading: false,
+		progress: 0,
+		progressText: '',
+		error: undefined
+	});
+
+	function switchProvider(type: 'claude' | 'local') {
+		providerType = type;
+		if (type === 'claude') {
+			provider = new ClaudeProvider();
+		} else {
+			import('$lib/providers/local-server').then(mod => {
+				provider = new mod.LocalServerProvider();
+			});
+		}
+	}
+
+	async function handleLoadModel() {
+		localModelStatus.loading = true;
+		localModelStatus.progressText = 'Connecting to local model server...';
+		localModelStatus.error = undefined;
+
+		try {
+			const res = await fetch('http://localhost:8899/v1/chat/completions', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					messages: [{ role: 'user', content: 'test' }],
+					max_tokens: 1
+				})
+			});
+			if (!res.ok) throw new Error('Server not responding');
+			localModelStatus.loaded = true;
+			localModelStatus.loading = false;
+			switchProvider('local');
+		} catch (err: any) {
+			localModelStatus.error = 'Local server not running. Start with: source finetune/venv/bin/activate && mlx_lm.server --model ./finetune/fused-model --port 8899';
+			localModelStatus.loading = false;
+		}
+	}
+
+	function handleUnloadModel() {
+		localModelStatus = { loaded: false, loading: false, progress: 0, progressText: '', error: undefined };
+		switchProvider('claude');
+	}
 
 	// Save/Browse state
 	let showSaveDialog = $state(false);
 	let saveName = $state('');
 	let showBrowse = $state(false);
 	let savedBeats = $state<SavedBeat[]>([]);
+
+	// Voice input
+	let recording = $state(false);
+	let recognition: any = null;
 
 	function getEditor() {
 		return (editorEl as any)?.editor;
@@ -36,6 +93,26 @@
 
 	function updateEditor() {
 		getEditor()?.evaluate();
+	}
+
+	function handleUndo() {
+		const snap = history.undo();
+		if (!snap) return;
+		const editor = getEditor();
+		if (!editor) return;
+		editor.setCode(snap.code);
+		currentCode = snap.code;
+		editor.evaluate();
+	}
+
+	function handleRedo() {
+		const snap = history.redo();
+		if (!snap) return;
+		const editor = getEditor();
+		if (!editor) return;
+		editor.setCode(snap.code);
+		currentCode = snap.code;
+		editor.evaluate();
 	}
 
 	function readEditorCode(): string {
@@ -112,7 +189,8 @@
 
 	async function executeAction(
 		action: string,
-		code: string
+		code: string,
+		prompt: string = ''
 	): Promise<{ error?: string }> {
 		const editor = getEditor();
 		if (!editor) return {};
@@ -120,6 +198,7 @@
 		if (code && (action === 'update' || action === 'play')) {
 			editor.setCode(code);
 			currentCode = code;
+			history.push(code, prompt);
 			const result = await evaluateAndWaitForResult();
 			if (action === 'play' && !result.error) {
 				editor.start();
@@ -132,7 +211,7 @@
 		return {};
 	}
 
-	function buildConversationHistory(): ConversationMessage[] {
+	function buildConversationHistory() {
 		return messages.slice(-MAX_HISTORY).map((m) => ({
 			role: m.role,
 			text: m.text,
@@ -140,19 +219,11 @@
 		}));
 	}
 
-	async function callApi(prompt: string): Promise<ApiResponse> {
-		const res = await fetch('/api/claude', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				prompt,
-				currentCode: currentCode || readEditorCode(),
-				conversationHistory: buildConversationHistory()
-			})
+	async function callApi(prompt: string): Promise<{ code: string; action: string; message: string }> {
+		return provider.generate(prompt, {
+			currentCode: history.contextForLLM() || currentCode || readEditorCode(),
+			conversationHistory: buildConversationHistory()
 		});
-
-		if (!res.ok) throw new Error(res.statusText);
-		return await res.json();
 	}
 
 	async function scrollToBottom() {
@@ -181,7 +252,7 @@
 			scrollToBottom();
 
 			if (data.action && data.action !== 'none') {
-				const result = await executeAction(data.action, data.code || '');
+				const result = await executeAction(data.action, data.code || '', prompt);
 
 				if (result.error) {
 					let retryCount = 0;
@@ -233,6 +304,57 @@
 		}
 	}
 
+	function toggleVoice() {
+		if (recording) {
+			recognition?.stop();
+			return;
+		}
+
+		const SpeechRecognition =
+			(window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+		if (!SpeechRecognition) {
+			alert('Speech recognition is not supported in this browser.');
+			return;
+		}
+
+		recognition = new SpeechRecognition();
+		recognition.lang = 'en-US';
+		recognition.interimResults = true;
+		recognition.continuous = false;
+
+		let finalTranscript = '';
+
+		recognition.onstart = () => {
+			recording = true;
+			finalTranscript = '';
+		};
+
+		recognition.onresult = (e: any) => {
+			let interim = '';
+			for (let i = e.resultIndex; i < e.results.length; i++) {
+				if (e.results[i].isFinal) {
+					finalTranscript += e.results[i][0].transcript;
+				} else {
+					interim += e.results[i][0].transcript;
+				}
+			}
+			chatInput = finalTranscript + interim;
+		};
+
+		recognition.onend = () => {
+			recording = false;
+			if (finalTranscript.trim()) {
+				chatInput = finalTranscript.trim();
+			}
+		};
+
+		recognition.onerror = () => {
+			recording = false;
+		};
+
+		recognition.start();
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
@@ -277,6 +399,8 @@
 				<button class="btn play" onclick={play}>Play</button>
 				<button class="btn stop" onclick={stop}>Stop</button>
 				<button class="btn update" onclick={updateEditor}>Update</button>
+				<button class="btn undo" onclick={handleUndo} disabled={!history.canUndo}>Undo</button>
+				<button class="btn redo" onclick={handleRedo} disabled={!history.canRedo}>Redo</button>
 				<div class="controls-spacer"></div>
 				<button class="btn save" onclick={openSaveDialog}>Save</button>
 				<button class="btn browse" onclick={openBrowse}>Browse</button>
@@ -297,7 +421,44 @@ s("bd sd:1 hh bd sd:3")
 	</div>
 
 	<div class="chat-pane">
-		<div class="chat-header">Strudel Assistant</div>
+		<div class="chat-header">
+			<span>Strudel Assistant</span>
+			<div class="provider-controls">
+				<button
+					class="provider-btn"
+					class:active={providerType === 'claude'}
+					onclick={() => switchProvider('claude')}
+				>Cloud</button>
+				<button
+					class="provider-btn"
+					class:active={providerType === 'local'}
+					onclick={() => { if (localModelStatus.loaded) switchProvider('local'); }}
+					disabled={!localModelStatus.loaded}
+				>Local</button>
+			</div>
+		</div>
+
+		{#if !localModelStatus.loaded || providerType === 'local' || localModelStatus.loading}
+			<div class="model-bar">
+				{#if !localModelStatus.loaded && !localModelStatus.loading}
+					<span class="model-name">Strudel Coder 0.5B</span>
+					<button class="btn-sm load" onclick={handleLoadModel}>Load (~506MB)</button>
+				{:else if localModelStatus.loading}
+					<div class="model-progress">
+						<div class="progress-bar">
+							<div class="progress-fill" style="width: {localModelStatus.progress * 100}%"></div>
+						</div>
+						<span class="progress-text">{localModelStatus.progressText}</span>
+					</div>
+				{:else}
+					<span class="model-loaded">Strudel Coder 0.5B</span>
+					<button class="btn-sm delete" onclick={handleUnloadModel}>Unload</button>
+				{/if}
+				{#if localModelStatus.error}
+					<span class="model-error">{localModelStatus.error}</span>
+				{/if}
+			</div>
+		{/if}
 
 		<div class="chat-messages" bind:this={chatMessagesEl}>
 			{#each messages as msg}
@@ -323,9 +484,20 @@ s("bd sd:1 hh bd sd:3")
 				rows="2"
 				disabled={waiting}
 			></textarea>
-			<button class="btn send" onclick={sendMessage} disabled={waiting || !chatInput.trim()}>
-				Send
-			</button>
+			<div class="input-buttons">
+				<button
+					class="btn mic"
+					class:mic-active={recording}
+					onclick={toggleVoice}
+					disabled={waiting}
+					title={recording ? 'Stop recording' : 'Voice input'}
+				>
+					{recording ? '&#9632;' : '&#127908;'}
+				</button>
+				<button class="btn send" onclick={sendMessage} disabled={waiting || !chatInput.trim()}>
+					Send
+				</button>
+			</div>
 		</div>
 	</div>
 </div>
@@ -483,6 +655,11 @@ s("bd sd:1 hh bd sd:3")
 		color: #fff;
 	}
 
+	.undo, .redo {
+		background: #555;
+		color: #fff;
+	}
+
 	.save {
 		background: #ff9800;
 		color: #fff;
@@ -509,12 +686,113 @@ s("bd sd:1 hh bd sd:3")
 	}
 
 	.chat-header {
-		padding: 1rem 1.25rem;
+		padding: 0.75rem 1.25rem;
 		font-weight: 700;
 		font-size: 1rem;
 		border-bottom: 1px solid #2a2a4a;
 		color: #fff;
 		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.provider-controls {
+		display: flex;
+		gap: 2px;
+		background: #1a1a2e;
+		border-radius: 6px;
+		padding: 2px;
+	}
+
+	.provider-btn {
+		padding: 0.3rem 0.7rem;
+		border: none;
+		border-radius: 5px;
+		font-size: 0.75rem;
+		font-weight: 600;
+		cursor: pointer;
+		background: transparent;
+		color: #888;
+		transition: all 0.15s;
+	}
+
+	.provider-btn.active {
+		background: #5c6bc0;
+		color: #fff;
+	}
+
+	.provider-btn:disabled {
+		opacity: 0.3;
+		cursor: not-allowed;
+	}
+
+	.model-bar {
+		padding: 0.6rem 1rem;
+		border-bottom: 1px solid #2a2a4a;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-shrink: 0;
+		flex-wrap: wrap;
+	}
+
+	.model-select {
+		flex: 1;
+		min-width: 0;
+		padding: 0.35rem 0.5rem;
+		background: #1a1a2e;
+		border: 1px solid #2a2a4a;
+		border-radius: 5px;
+		color: #e0e0e0;
+		font-size: 0.78rem;
+		font-family: inherit;
+	}
+
+	.model-progress {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+	}
+
+	.progress-bar {
+		height: 6px;
+		background: #1a1a2e;
+		border-radius: 3px;
+		overflow: hidden;
+	}
+
+	.progress-fill {
+		height: 100%;
+		background: #5c6bc0;
+		border-radius: 3px;
+		transition: width 0.3s;
+	}
+
+	.progress-text {
+		font-size: 0.7rem;
+		color: #888;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.model-name {
+		font-size: 0.78rem;
+		color: #ccc;
+	}
+
+	.model-loaded {
+		font-size: 0.78rem;
+		color: #a5d6a7;
+		font-weight: 600;
+	}
+
+	.model-error {
+		font-size: 0.75rem;
+		color: #e53935;
+		width: 100%;
 	}
 
 	.chat-messages {
@@ -603,10 +881,35 @@ s("bd sd:1 hh bd sd:3")
 		border-color: #5c6bc0;
 	}
 
+	.input-buttons {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		align-self: flex-end;
+	}
+
+	.mic {
+		background: #444;
+		color: #e0e0e0;
+		padding: 0.5rem;
+		font-size: 1rem;
+		line-height: 1;
+	}
+
+	.mic-active {
+		background: #e53935;
+		color: #fff;
+		animation: pulse 1s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0.6; }
+	}
+
 	.send {
 		background: #5c6bc0;
 		color: #fff;
-		align-self: flex-end;
 	}
 
 	/* Overlay + Dialog */
